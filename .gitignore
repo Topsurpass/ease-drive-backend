@@ -12,6 +12,9 @@ venv/
 .env.*
 !.env.example
 
+# Local agent settings (machine-specific permissions)
+.claude/settings.local.json
+
 # Tooling caches
 .pytest_cache/
 .mypy_cache/

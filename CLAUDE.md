@@ -53,7 +53,7 @@ The context window is your only control surface over the model. Treat it as a de
 ### LLM access — local Claude Code, not the API
 
 - When the software we build needs to call an LLM, do NOT use an LLM API (Anthropic API, OpenAI API, any hosted inference endpoint) unless Temz explicitly instructs it. Route the call through the local Claude Code instead.
-- If no LLM service exists yet in the project, build one. Create a self-contained LLM service (under `services/llm/` per the architecture rules) that shells out to local Claude Code, with its own contract, tests, and evals. Every other service calls that contract, never an external API.
+- If no LLM service exists yet in the project, build one. Create a self-contained LLM service (`app/services/llm.py`, or `app/services/llm/` once it outgrows a module) that shells out to local Claude Code, with its own contract, tests, and evals. Every other service calls that contract, never an external API.
 - Always use the best available model by default unless Temz explicitly instructs otherwise. No silent downgrades to a cheaper or smaller model for cost.
 
 ### Tech choice — vanilla by default
@@ -81,20 +81,57 @@ When a task matches a specialized domain (SEO, schema, security audit, design re
 
 Failures get skillified — that rule already stands. So does repeated success. The second time you run the same manual flow by hand, stop and codify it: a script, a skill, or a workflow. One-off prompts don't compound; reusable flows do. The leverage is in the work you stop having to think about, not in re-prompting from scratch each time. Done it twice by hand? The third time is a command.
 
-## Architecture — services-first, parallel-friendly
+## Architecture — layered FastAPI, parallel-friendly
 
-Build everything as independent services / self-contained directories. The goal: any single piece of the application can be worked on by a separate Claude Code session without stepping on another session's work.
+This repo follows the conventional FastAPI layout: one `app/` package split by
+technical layer, matching the official docs' Bigger Applications guide and
+`fastapi/full-stack-fastapi-template`. A new Python dev should recognise it on
+sight. Do not reorganise it into per-service top-level directories.
 
-- **One concern, one directory.** Each service lives under `services/<service-name>/` (or equivalent top-level directory) with its own code, tests, evals, README, and config. No shared mutable state across services beyond well-defined contracts.
-- **Contracts at the boundary.** Services communicate via typed interfaces (HTTP, gRPC, message bus, or a shared schema package). Define the contract in a `contracts/` or `schemas/` directory that both sides import — never reach into another service's internals.
-- **Independent test + eval suites.** Each service has its own gate tests and periodic evals. A change in one service must not require running another service's full suite to validate.
-- **Independent deploy unit.** Each service builds and ships on its own. No monolithic release that forces every service to move in lockstep.
-- **Parallel-session safe.** Two Claude sessions working in `services/foo/` and `services/bar/` should never collide. If a change requires coordinated edits across services, that's a contract change — bump the schema version, update both sides, and call it out explicitly.
-- **Top-level only holds glue.** Root directory: orchestration scripts, shared config, contracts, docs. No business logic.
+```
+app/
+├── main.py                    # create_app() factory + `app` ASGI entrypoint
+├── core/                      # settings, security, logging
+├── api/
+│   ├── deps.py                # shared dependencies as Annotated aliases
+│   └── v1/
+│       ├── router.py          # aggregates v1 endpoint routers
+│       └── endpoints/         # one module per resource
+├── schemas/                   # pydantic request/response models
+├── models/                    # persistence models (SQLAlchemy)
+└── services/                  # business logic, HTTP-free
+tests/                         # mirrors app/ exactly
+```
 
-When in doubt, lean toward more services with sharper boundaries rather than fewer services with fuzzy ones.
+- **One concern, one layer.** A file belongs to exactly one of endpoints,
+  schemas, models, services, or core. A module that spans two is split.
+- **Layers point one way.** `endpoints → services → models`. Schemas are read by
+  endpoints and services. Nothing in `services/` or `models/` may import
+  `fastapi`, raise `HTTPException`, or know a status code. Endpoints translate
+  between HTTP and the domain; that rule is what keeps services unit-testable
+  without a client.
+- **Schemas are not models.** `app/schemas/` is the wire contract, `app/models/`
+  is the database. Never return a persistence model from an endpoint — that is
+  how private columns leak.
+- **Versioned routes.** Every route mounts under `api/v1/`. A breaking change
+  gets `api/v2/` alongside it; existing clients keep working.
+- **Config through `app/core/config.py`.** Read settings via the `SettingsDep`
+  dependency, never `os.environ` at call sites. That is what makes settings
+  overridable in tests.
+- **Tests mirror `app/`.** `tests/api/v1/test_hello.py` covers
+  `app/api/v1/endpoints/hello.py`. A new module gets its test in the mirrored
+  path, in the same commit.
 
-**Fan out by default.** The services-first layout exists so work runs in parallel. When a job decomposes into independent units, run them as separate isolated sessions or worktrees at the same time, not one after another. Serial work on parallelizable units is wasted wall-clock. Coordinate at the contract boundary, merge each unit when it's green.
+**Parallel-session safe.** The boundary for parallel work is the resource, not
+the directory: two sessions adding `drivers` and `rides` touch disjoint files in
+`endpoints/`, `schemas/`, `services/`, and `tests/`, and meet only at
+`app/api/v1/router.py` — one `include_router` line each. Adding a resource means
+touching that one shared file; expect it and keep the edit to a single line.
+
+**Fan out by default.** When a job decomposes into independent resources, run
+them as separate isolated sessions or worktrees at the same time, not one after
+another. Serial work on parallelizable units is wasted wall-clock. Merge each
+unit when its gate is green.
 
 ## Completion status protocol
 
