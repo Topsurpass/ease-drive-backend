@@ -1,0 +1,54 @@
+[project]
+name = "ease-drive-backend"
+version = "0.1.0"
+description = "Ease Drive backend. Root holds glue only; business logic lives in services/."
+requires-python = ">=3.13"
+dependencies = ["api"]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["services/*"]
+
+[tool.uv.sources]
+api = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+    "httpx2>=2.0.0",
+    "mypy>=1.14.1",
+    "ruff>=0.9.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["services/api/tests"]
+addopts = "-q --strict-markers --strict-config"
+filterwarnings = ["error"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["services/api/src", "services/api/tests"]
+strict = true
+warn_unreachable = true
+disallow_any_unimported = true
+# `disallow_any_explicit` is deliberately off: pydantic's BaseModel declares
+# explicit `Any` in its inherited attributes, so the flag errors on every model
+# definition regardless of our own code. Verified against pydantic 2.13.4.
+enable_error_code = [
+    "redundant-expr",
+    "possibly-undefined",
+    "truthy-bool",
+    "ignore-without-code",
+]
+
+[tool.ruff]
+target-version = "py313"
+src = ["services/api/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "ANN", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"services/api/tests/*" = ["ANN401"]
