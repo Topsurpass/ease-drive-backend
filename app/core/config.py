@@ -5,9 +5,12 @@ local ``.env`` file, falling back to the defaults declared here.
 """
 
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic import AliasChoices, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from app.core.cors import parse_origins
 
 
 class Settings(BaseSettings):
@@ -39,13 +42,29 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DATABASE_URL", "EASE_DRIVE_DATABASE_URL"),
     )
 
-    # Browser origins allowed to POST the booking form. The frontend runs on a
-    # different origin, so without this the browser blocks the request before
-    # it ever reaches an endpoint.
-    cors_origins: tuple[str, ...] = (
+    # Browser origins allowed to call this API.
+    #
+    # This must list the origin the BROWSER is on, which is the frontend, not
+    # this backend's own URL. A request the page makes to its own origin is not
+    # cross-origin and never consults this list.
+    #
+    # NoDecode plus the validator below means a hosting dashboard can hold a
+    # plain comma-separated line instead of JSON, which is what those
+    # single-line fields invite. Entries are normalized, so a pasted trailing
+    # slash does not silently stop matching.
+    cors_origins: Annotated[tuple[str, ...], NoDecode] = (
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        # The deployed backend's own origin. Same-origin calls (the /docs page
+        # trying it out) never need this, but it costs nothing and makes the
+        # deployed host explicit.
+        "https://ease-drive-backend.fastapicloud.dev",
     )
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, value: object) -> tuple[str, ...]:
+        return parse_origins(value)
 
     @property
     def is_database_configured(self) -> bool:

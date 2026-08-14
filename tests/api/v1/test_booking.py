@@ -1,6 +1,7 @@
 """Gate tests for POST /api/v1/bookings."""
 
 import re
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -9,6 +10,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_db_session
+from app.core.config import Settings, get_settings
+from app.main import create_app
 from app.models.booking import Booking
 
 ENDPOINT = "/api/v1/bookings"
@@ -114,3 +118,45 @@ def test_allows_the_frontend_origin(db_client: TestClient) -> None:
         ENDPOINT, json=_payload(), headers={"Origin": "http://localhost:3000"}
     )
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_answers_the_preflight(db_client: TestClient) -> None:
+    """A JSON POST is preflighted. If OPTIONS fails the POST is never sent."""
+    response = db_client.options(
+        ENDPOINT,
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
+def test_allows_the_deployed_backend_origin(db_session: AsyncSession) -> None:
+    """The origin Temz asked for, exercised through the real middleware."""
+    origin = "https://ease-drive-backend.fastapicloud.dev"
+    settings = Settings(database_url=None)
+    application = create_app(settings)
+    application.dependency_overrides[get_settings] = lambda: settings
+
+    async def _session_override() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    application.dependency_overrides[get_db_session] = _session_override
+
+    with TestClient(application) as deployed:
+        response = deployed.post(ENDPOINT, json=_payload(), headers={"Origin": origin})
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_rejects_an_unlisted_origin(db_client: TestClient) -> None:
+    """An allowlist that lets anything through is not an allowlist."""
+    response = db_client.post(
+        ENDPOINT, json=_payload(), headers={"Origin": "https://evil.example"}
+    )
+    assert "access-control-allow-origin" not in response.headers

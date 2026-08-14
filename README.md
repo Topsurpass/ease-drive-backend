@@ -11,7 +11,8 @@ guide and `fastapi/full-stack-fastapi-template`.
 app/
 ├── main.py                    # create_app() factory + `app` ASGI entrypoint
 ├── core/
-│   └── config.py              # Settings (pydantic-settings) + get_settings()
+│   ├── config.py              # Settings (pydantic-settings) + get_settings()
+│   └── cors.py                # origin normalization for the CORS allowlist
 ├── db/
 │   ├── url.py                 # Neon URL → asyncpg URL + connect_args
 │   ├── base.py                # DeclarativeBase
@@ -42,7 +43,7 @@ tests/                         # mirrors app/
 ├── test_main.py
 ├── test_packaging.py          # guards the deploy-time dependency declaration
 ├── api/v1/{test_hello,test_health,test_booking}.py
-├── core/test_config.py
+├── core/{test_config,test_cors}.py
 ├── db/test_url.py
 ├── schemas/{test_hello,test_booking}.py
 ├── services/{test_hello,test_booking}.py
@@ -118,6 +119,44 @@ Failures use the frontend's `BookingFailure` shape rather than FastAPI's default
 To wire the frontend up, write its `http-transport.ts` against this endpoint
 and call `setBookingTransport(...)`, per
 `ease-drive-frontend/src/services/booking/README.md`. No component changes.
+
+## CORS
+
+The browser blocks a cross-origin POST unless this API names the calling origin
+in its allowlist. Allowed by default:
+
+| Origin                                       | Why                             |
+| -------------------------------------------- | ------------------------------- |
+| `http://localhost:3000`                        | Next.js dev server              |
+| `http://127.0.0.1:3000`                        | same, via loopback IP           |
+| `https://ease-drive-backend.fastapicloud.dev`  | this API's own deployed origin  |
+
+Override with a comma-separated list (a JSON array also works). Setting it
+**replaces** the defaults, so keep localhost if you still develop against it:
+
+```bash
+EASE_DRIVE_CORS_ORIGINS=http://localhost:3000,https://your-frontend.vercel.app
+```
+
+**The entry must be the origin the browser is on, which is the frontend.** This
+backend's own URL is the value `NEXT_PUBLIC_API_BASE_URL` points at, not
+anything a browser sends as `Origin`; a page calling its own origin is not
+cross-origin and never consults this list. If the booking form is blocked, the
+origin to add is whatever serves the form.
+
+Entries are normalized by `app/core/cors.py`: a trailing slash, path, query or
+fragment is stripped and the host is lower-cased. Starlette matches `Origin` by
+exact string, so `https://example.com/` pasted from an address bar would
+otherwise never match and fail preflight with nothing in the logs.
+
+Verified against a running server:
+
+```
+OPTIONS /api/v1/bookings, Origin: https://ease-drive-backend.fastapicloud.dev
+  → 200, access-control-allow-origin: https://ease-drive-backend.fastapicloud.dev
+OPTIONS /api/v1/bookings, Origin: https://evil.example
+  → 400, no access-control-allow-origin  (browser blocks)
+```
 
 ## Database
 
@@ -237,7 +276,7 @@ Two lanes.
 pytest -m integration       # the Neon lane, run before shipping schema changes
 ```
 
-The gate is 97 tests, deterministic, offline and free. Database-backed tests
+The gate is 119 tests, deterministic, offline and free. Database-backed tests
 run the real models and the real session machinery against in-memory SQLite, so
 no test in this lane touches the network.
 
