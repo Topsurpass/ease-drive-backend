@@ -42,9 +42,15 @@ def normalize_database_url(raw: str) -> tuple[str, dict[str, Any]]:
 
     Idempotent: passing an already-normalized URL returns it unchanged.
     """
-    split = urlsplit(raw.strip())
+    text = raw.strip()
+    split = urlsplit(text)
 
-    scheme = ASYNC_SCHEME if split.scheme.startswith("postgres") else split.scheme
+    # Everything below is Postgres/asyncpg specific: the connect_args would
+    # raise on another driver, and rebuilding a URL whose netloc is empty (as
+    # in `sqlite+aiosqlite:///./local.db`) silently drops slashes and changes
+    # the path. Anything not Postgres is returned exactly as given.
+    if not split.scheme.startswith("postgres"):
+        return text, {}
 
     params = parse_qsl(split.query, keep_blank_values=True)
     kept = [(key, value) for key, value in params if key not in LIBPQ_ONLY_PARAMS]
@@ -53,11 +59,9 @@ def normalize_database_url(raw: str) -> tuple[str, dict[str, Any]]:
     connect_args: dict[str, Any] = {}
 
     sslmode = dropped.get("sslmode")
-    if sslmode is None:
+    if sslmode is None or sslmode in SSL_REQUIRED_MODES:
         # Neon always requires TLS; default to it rather than silently
         # downgrading a URL that arrived without the parameter.
-        connect_args["ssl"] = True
-    elif sslmode in SSL_REQUIRED_MODES:
         connect_args["ssl"] = True
 
     host = split.hostname or ""
@@ -66,7 +70,7 @@ def normalize_database_url(raw: str) -> tuple[str, dict[str, Any]]:
         connect_args["prepared_statement_cache_size"] = 0
 
     normalized = urlunsplit(
-        (scheme, split.netloc, split.path, urlencode(kept), split.fragment)
+        (ASYNC_SCHEME, split.netloc, split.path, urlencode(kept), split.fragment)
     )
     return normalized, connect_args
 

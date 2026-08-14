@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # single-line fields invite. Entries are normalized, so a pasted trailing
     # slash does not silently stop matching.
     cors_origins: Annotated[tuple[str, ...], NoDecode] = (
+        # The deployed frontend. This is the one that matters: it is the origin
+        # the browser is on when the booking form posts.
+        "https://ease-drive-frontend.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         # The deployed backend's own origin. Same-origin calls (the /docs page

@@ -16,6 +16,7 @@ import app.models  # noqa: F401  - registers every model on Base.metadata
 from alembic import context
 from app.core.config import get_settings
 from app.db.base import Base
+from app.db.naming import VERSION_TABLE, include_name
 from app.db.url import normalize_database_url
 
 config = context.config
@@ -35,23 +36,6 @@ if not settings.is_database_configured:
 assert settings.database_url is not None  # narrowed by the guard above
 _url, _connect_args = normalize_database_url(settings.database_url)
 config.set_main_option("sqlalchemy.url", _url)
-
-
-# This Neon database is shared with nibbs-report, whose six `nibbs_` tables are
-# not in our metadata. Without this filter, autogenerate reads them as "exists
-# in the database but not in the model" and emits DROP TABLE for each one,
-# which would destroy the other application. Only `ease_` tables are ours.
-TABLE_PREFIX = "ease_"
-VERSION_TABLE = "ease_alembic_version"
-
-
-def include_name(
-    name: str | None, type_: str, _parent_names: dict[str, str | None]
-) -> bool:
-    """Hide every table that is not ours from autogenerate's comparison."""
-    if type_ == "table":
-        return name is not None and name.startswith(TABLE_PREFIX)
-    return True
 
 
 def run_migrations_offline() -> None:

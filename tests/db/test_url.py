@@ -83,6 +83,20 @@ def test_tolerates_surrounding_whitespace() -> None:
     assert url.startswith("postgresql+asyncpg://")
 
 
+def test_leaves_a_non_postgres_url_alone() -> None:
+    """Those connect_args are asyncpg's; another driver would raise on them."""
+    url, connect_args = normalize_database_url("sqlite+aiosqlite:///./local.db")
+    assert url == "sqlite+aiosqlite:///./local.db"
+    assert connect_args == {}
+
+
+def test_disables_ssl_when_sslmode_says_so() -> None:
+    _, connect_args = normalize_database_url(
+        "postgresql://u:p@localhost:5432/db?sslmode=disable"
+    )
+    assert "ssl" not in connect_args
+
+
 def test_describe_omits_the_password() -> None:
     """This output goes into /health, which is unauthenticated."""
     described = describe_database_url(NEON_POOLED)

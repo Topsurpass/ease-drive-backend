@@ -12,9 +12,11 @@ app/
 ├── main.py                    # create_app() factory + `app` ASGI entrypoint
 ├── core/
 │   ├── config.py              # Settings (pydantic-settings) + get_settings()
-│   └── cors.py                # origin normalization for the CORS allowlist
+│   ├── cors.py                # origin normalization for the CORS allowlist
+│   └── errors.py              # unhandled errors → JSON, inside the CORS layer
 ├── db/
 │   ├── url.py                 # Neon URL → asyncpg URL + connect_args
+│   ├── naming.py              # ease_ prefix + Alembic autogenerate guard
 │   ├── base.py                # DeclarativeBase
 │   └── session.py             # engine registry, session_scope, disposal
 ├── api/
@@ -43,8 +45,8 @@ tests/                         # mirrors app/
 ├── test_main.py
 ├── test_packaging.py          # guards the deploy-time dependency declaration
 ├── api/v1/{test_hello,test_health,test_booking}.py
-├── core/{test_config,test_cors}.py
-├── db/test_url.py
+├── core/{test_config,test_cors,test_errors}.py
+├── db/{test_url,test_naming}.py
 ├── schemas/{test_hello,test_booking}.py
 ├── services/{test_hello,test_booking}.py
 └── integration/test_neon.py   # real Neon; excluded from the gate
@@ -125,11 +127,12 @@ and call `setBookingTransport(...)`, per
 The browser blocks a cross-origin POST unless this API names the calling origin
 in its allowlist. Allowed by default:
 
-| Origin                                       | Why                             |
-| -------------------------------------------- | ------------------------------- |
-| `http://localhost:3000`                        | Next.js dev server              |
-| `http://127.0.0.1:3000`                        | same, via loopback IP           |
-| `https://ease-drive-backend.fastapicloud.dev`  | this API's own deployed origin  |
+| Origin                                        | Why                            |
+| --------------------------------------------- | ------------------------------ |
+| `https://ease-drive-frontend.vercel.app`       | the deployed frontend          |
+| `http://localhost:3000`                        | Next.js dev server             |
+| `http://127.0.0.1:3000`                        | same, via loopback IP          |
+| `https://ease-drive-backend.fastapicloud.dev`  | this API's own deployed origin |
 
 Override with a comma-separated list (a JSON array also works). Setting it
 **replaces** the defaults, so keep localhost if you still develop against it:
@@ -152,11 +155,34 @@ otherwise never match and fail preflight with nothing in the logs.
 Verified against a running server:
 
 ```
-OPTIONS /api/v1/bookings, Origin: https://ease-drive-backend.fastapicloud.dev
-  → 200, access-control-allow-origin: https://ease-drive-backend.fastapicloud.dev
+OPTIONS /api/v1/bookings, Origin: https://ease-drive-frontend.vercel.app
+  → 200, access-control-allow-origin: https://ease-drive-frontend.vercel.app
 OPTIONS /api/v1/bookings, Origin: https://evil.example
   → 400, no access-control-allow-origin  (browser blocks)
 ```
+
+### When a CORS error is not a CORS error
+
+Starlette's `ServerErrorMiddleware` sits *outside* every middleware the app
+adds, CORS included, so an unhandled exception used to return a bare
+`500 text/plain` with no `Access-Control-Allow-Origin` header at all. The
+browser then reports the only thing it can see:
+
+```
+Access to XMLHttpRequest ... blocked by CORS policy:
+No 'Access-Control-Allow-Origin' header is present
+```
+
+which blames CORS for a server crash. `app/core/errors.py` catches unhandled
+exceptions *inside* the CORS layer, logs the traceback, and returns
+
+```json
+{"ok": false, "code": "transport_error", "message": "The server hit an unexpected error. Please try again."}
+```
+
+so the response keeps its CORS headers and the frontend can read the failure.
+**If you see a CORS error with a 500 next to it, check the server log first —
+the allowlist is probably fine.**
 
 ## Database
 
@@ -182,9 +208,12 @@ including host, database name and latency, and never the password. It answers
 **Tables are prefixed `ease_`.** This Neon database is shared with the
 nibbs-report app, whose tables use `nibbs_`. Two consequences worth knowing:
 
-- Alembic's `env.py` filters autogenerate to `ease_` tables. Without that
-  filter, autogenerate reads the six `nibbs_` tables as "in the database but
-  not in the model" and emits `DROP TABLE` for each one.
+- Alembic's `env.py` filters autogenerate to `ease_` tables, via
+  `app/db/naming.py`. Without that filter, autogenerate reads another app's
+  tables as "in the database but not in the model" and emits `DROP TABLE` for
+  each one. The guard lives in an importable module so `tests/db/test_naming.py`
+  covers it in the gate, rather than relying on someone reading every
+  generated migration.
 - The migration version table is `ease_alembic_version`, not the default, so
   two apps on this database can never fight over migration state.
 
@@ -276,7 +305,7 @@ Two lanes.
 pytest -m integration       # the Neon lane, run before shipping schema changes
 ```
 
-The gate is 119 tests, deterministic, offline and free. Database-backed tests
+The gate is 136 tests, deterministic, offline and free. Database-backed tests
 run the real models and the real session machinery against in-memory SQLite, so
 no test in this lane touches the network.
 

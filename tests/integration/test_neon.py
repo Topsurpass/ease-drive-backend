@@ -21,6 +21,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import Settings, get_settings
+from app.db.naming import TABLE_PREFIX
 from app.db.session import dispose_engines, get_sessionmaker
 from app.models.booking import Booking
 from app.schemas.booking import BookingRequest
@@ -28,6 +29,8 @@ from app.services.booking import create_booking
 
 pytestmark = pytest.mark.integration
 
+# Tables owned by nibbs-report. Present only when DATABASE_URL points at the
+# database the two apps share; the dedicated `ease-drive` database has none.
 OTHER_APP_TABLES = {
     "nibbs_banks",
     "nibbs_nip_bank_codes",
@@ -160,8 +163,15 @@ async def test_check_constraints_are_enforced_by_postgres(
         await session.rollback()
 
 
-async def test_leaves_the_other_apps_tables_alone(neon_settings: Settings) -> None:
-    """This database is shared with nibbs-report. Its tables must still exist."""
+async def test_creates_nothing_outside_our_prefix(neon_settings: Settings) -> None:
+    """Every table this app owns must carry the `ease_` prefix.
+
+    The prefix is what keeps Alembic's autogenerate filter from proposing
+    `DROP TABLE` for another application's tables, so an unprefixed table is
+    both unmigratable and a hazard if this URL ever points at a shared
+    database. Tables belonging to a known other app are ignored here; the point
+    is that *we* never add one without the prefix.
+    """
     assert neon_settings.database_url is not None
     async with get_sessionmaker(neon_settings.database_url)() as session:
         rows = await session.execute(
@@ -172,4 +182,7 @@ async def test_leaves_the_other_apps_tables_alone(neon_settings: Settings) -> No
         )
         present = {row[0] for row in rows}
 
-    assert present >= OTHER_APP_TABLES, f"missing: {OTHER_APP_TABLES - present}"
+    ours = present - OTHER_APP_TABLES
+    unprefixed = {name for name in ours if not name.startswith(TABLE_PREFIX)}
+    assert not unprefixed, f"unprefixed tables in this database: {unprefixed}"
+    assert "ease_bookings" in present

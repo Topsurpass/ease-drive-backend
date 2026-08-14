@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
+from app.core.errors import ErrorEnvelopeMiddleware
 from app.db.session import dispose_engines
 from app.schemas.booking import BookingError
 
@@ -85,6 +86,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=f"{config.api_v1_prefix}/openapi.json",
         lifespan=lifespan,
     )
+    # Order matters, and it is inverted: the LAST middleware added is the
+    # outermost. ErrorEnvelopeMiddleware goes on first so CORSMiddleware wraps
+    # it, which is what lets a 500 leave with its CORS headers attached instead
+    # of surfacing in the browser as a bogus CORS failure.
+    application.add_middleware(ErrorEnvelopeMiddleware)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(config.cors_origins),
