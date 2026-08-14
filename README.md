@@ -36,6 +36,7 @@ app/
 tests/                         # mirrors app/ exactly
 ├── conftest.py
 ├── test_main.py
+├── test_packaging.py           # guards the deploy-time dependency declaration
 ├── api/v1/test_hello.py
 ├── core/test_config.py
 ├── schemas/test_hello.py
@@ -85,6 +86,36 @@ curl localhost:8000/api/v1/hello
 # {"message":"Hello, World!"}
 ```
 
+## Deploy
+
+```bash
+fastapi login
+fastapi deploy
+```
+
+The deploy image installs only what `pyproject.toml` declares, so `fastapi` is
+declared **with the `standard` extra**. Plain `fastapi` does not depend on
+`fastapi-cli`, and the `fastapi` console script raises at startup without it:
+
+```
+RuntimeError: To use the fastapi command, please install "fastapi[standard]"
+```
+
+A local venv can carry an orphaned `fastapi-cli` and mask this, which is how it
+shipped broken once. `tests/test_packaging.py` asserts the declaration in
+`pyproject.toml`, not just that the module imports, because the import check
+passes while the deploy is broken.
+
+`[tool.fastapi] entrypoint = "app.main:app"` pins what gets served. Without it
+the CLI auto-discovers, which silently picks a different module if files move.
+
+To reproduce the deploy environment locally:
+
+```bash
+UV_PROJECT_ENVIRONMENT=/tmp/deploy-venv uv sync --frozen --no-dev
+/tmp/deploy-venv/bin/fastapi run
+```
+
 ## Configuration
 
 Settings live in `app/core/config.py`. Every field reads from an
@@ -107,7 +138,7 @@ tests swap configuration via `app.dependency_overrides`.
 ./scripts/check.sh
 ```
 
-Runs ruff (lint + format), `mypy --strict`, and pytest. 25 tests, deterministic,
+Runs ruff (lint + format), `mypy --strict`, and pytest. 30 tests, deterministic,
 offline, under two seconds. The pre-commit hook runs exactly this.
 
 ## Typing

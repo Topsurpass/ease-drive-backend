@@ -41,8 +41,8 @@ The context window is your only control surface over the model. Treat it as a de
 - Every failure gets skillified (the 10 steps). Same day. Same session when possible.
 - "I'll add tests later" is banned. If the tests/evals aren't in the diff, the work isn't done.
 - Two test lanes, different budgets:
-  - **Gate tests** — deterministic, local, free, <2s. Run on every commit via pre-commit hook. Never flaky.
-  - **Periodic evals** — paid (LLM calls), slower, quality-measuring. Run before ship and nightly. Allowed to be non-deterministic but must have a pass threshold.
+    - **Gate tests** — deterministic, local, free, <2s. Run on every commit via pre-commit hook. Never flaky.
+    - **Periodic evals** — paid (LLM calls), slower, quality-measuring. Run before ship and nightly. Allowed to be non-deterministic but must have a pass threshold.
 
 ### Tie every change to a measurable outcome
 
@@ -148,6 +148,8 @@ At the end of every task, report one of:
 
 Once a task is done, two things happen, no exceptions:
 
+0. Delete all **pycache** folders
+
 1. **Commit and push.** Stage the work, write a clear commit message, push to GitHub. Don't wait to be asked. Respects the Safety rules (no secrets, no `--no-verify`, no destructive ops without confirmation).
 2. **Report what to restart.** Tell Temz exactly which service / system / program needs to be restarted for the change to take effect, with the full list of commands to run. If nothing needs restarting, say so explicitly.
 
@@ -209,16 +211,21 @@ When Temz asks for something, the answer is the finished product — not a plan.
 Apply all five SOLID principles in every file you write.
 
 ### S — Single Responsibility
+
 Each component, hook, or utility must do exactly one thing. A `<UserCard />` renders a user card. A `useUserData()` hook fetches user data. They do not do each other's job. Split any component that handles more than one concern.
 
 ### O — Open/Closed
+
 Components should be open for extension (via props, slots, composition) but closed for direct modification. Use prop-driven variants, `children`, and composition patterns rather than editing core components to add new behavior.
 
 ### L — Liskov Substitution
+
 If a component accepts a base type/interface, any variant or extension of that type must work seamlessly. Props interfaces must be designed so that derived/extended data shapes are always backward-compatible.
 
 ### I — Interface Segregation
+
 Keep prop interfaces focused and minimal. Don't pass a large god-object when only two fields are needed. Define narrow, purpose-specific prop types. Prefer multiple small interfaces over one large one.
 
 ### D — Dependency Inversion
+
 Components depend on abstractions (prop interfaces, context, hooks), not on concrete implementations. Business logic lives in hooks or services, not inside JSX. Fetch logic, state management, and side effects belong outside the component tree.

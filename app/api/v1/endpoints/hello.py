@@ -13,7 +13,7 @@ router = APIRouter(tags=["hello"])
     "/hello",
     response_model=HelloResponse,
     status_code=status.HTTP_200_OK,
-    summary="Say hello",
+    summary="Say hello to greet user",
 )
 async def read_hello(settings: SettingsDep) -> HelloResponse:
     """Return the greeting."""
