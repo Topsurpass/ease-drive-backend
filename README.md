@@ -9,38 +9,44 @@ guide and `fastapi/full-stack-fastapi-template`.
 
 ```
 app/
-├── __init__.py
 ├── main.py                    # create_app() factory + `app` ASGI entrypoint
-├── py.typed
 ├── core/
-│   ├── __init__.py
 │   └── config.py              # Settings (pydantic-settings) + get_settings()
+├── db/
+│   ├── url.py                 # Neon URL → asyncpg URL + connect_args
+│   ├── base.py                # DeclarativeBase
+│   └── session.py             # engine registry, session_scope, disposal
 ├── api/
-│   ├── __init__.py
-│   ├── deps.py                # shared dependencies as Annotated aliases
+│   ├── deps.py                # SettingsDep, SessionDep
 │   └── v1/
-│       ├── __init__.py
 │       ├── router.py          # aggregates every v1 endpoint router
 │       └── endpoints/
-│           ├── __init__.py
-│           └── hello.py       # GET /hello
-├── schemas/
-│   ├── __init__.py
-│   └── hello.py               # HelloResponse
+│           ├── hello.py       # GET  /hello
+│           ├── health.py      # GET  /health
+│           └── booking.py     # POST /bookings
+├── schemas/                   # pydantic wire contracts
+│   ├── hello.py
+│   └── booking.py             # BookingRequest / Accepted / Error
 ├── models/
-│   └── __init__.py            # empty until a database lands
-└── services/
-    ├── __init__.py
-    └── hello.py               # business logic, HTTP-free
+│   └── booking.py             # ease_bookings table
+└── services/                  # business logic, HTTP-free
+    ├── hello.py
+    └── booking.py
 
-tests/                         # mirrors app/ exactly
-├── conftest.py
+alembic/
+├── env.py                     # async, reads DATABASE_URL via app.core.config
+└── versions/                  # migrations
+
+tests/                         # mirrors app/
+├── conftest.py                # settings, sqlite engine, client, db_client
 ├── test_main.py
-├── test_packaging.py           # guards the deploy-time dependency declaration
-├── api/v1/test_hello.py
+├── test_packaging.py          # guards the deploy-time dependency declaration
+├── api/v1/{test_hello,test_health,test_booking}.py
 ├── core/test_config.py
-├── schemas/test_hello.py
-└── services/test_hello.py
+├── db/test_url.py
+├── schemas/{test_hello,test_booking}.py
+├── services/{test_hello,test_booking}.py
+└── integration/test_neon.py   # real Neon; excluded from the gate
 
 scripts/check.sh               # the gate suite
 .githooks/pre-commit           # runs the gate before every commit
@@ -53,16 +59,101 @@ between HTTP and the domain. That is what lets `tests/services/` run without a
 client. `app/schemas/` is the wire contract; `app/models/` is the database. They
 stay separate so a private column can never leak into a response.
 
-## Endpoint
+## Endpoints
 
-| Method | Path             | Status | Body                            |
-| ------ | ---------------- | ------ | ------------------------------- |
-| `GET`  | `/api/v1/hello`  | `200`  | `{"message": "Hello, World!"}`  |
+| Method | Path               | Status | Body                                          |
+| ------ | ------------------ | ------ | --------------------------------------------- |
+| `GET`  | `/api/v1/hello`    | `200`  | `{"message": "Hello, World!"}`                 |
+| `GET`  | `/api/v1/health`   | `200`  | deployment diagnostic, see below               |
+| `POST` | `/api/v1/bookings` | `201`  | `{"ok": true, "reference": "ED-XXXXXX", ...}`  |
 
 Interactive docs at `/docs`, schema at `/api/v1/openapi.json`.
 
 The `/api/v1` prefix comes from `EASE_DRIVE_API_V1_PREFIX`. Set it to `""` if
-you want the route at `/hello` instead.
+you want the routes unversioned.
+
+## POST /api/v1/bookings
+
+Persists a booking from the marketing site's booking form and returns a
+reference. The request and response shapes are copied from the frontend, which
+declares itself the source of truth:
+
+- request: `ease-drive-frontend/src/lib/validators/booking.schema.ts`
+- response: `ease-drive-frontend/src/services/booking/index.ts`
+
+```bash
+curl -X POST localhost:8000/api/v1/bookings \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "fullName": "Ada Lovelace",
+    "phone": "+234 800 000 0000",
+    "email": "ada@example.com",
+    "tripType": "airport",
+    "pickupLocation": "Ikeja GRA",
+    "destination": "Murtala Muhammed Airport",
+    "startDate": "2026-09-01",
+    "durationDays": 2,
+    "passengers": 3,
+    "notes": "Two large suitcases."
+  }'
+# {"ok":true,"reference":"ED-VS9T74","receivedAt":"2026-08-14T18:42:45.179524Z"}
+```
+
+Fields are camelCase because that is what the zod schema emits; snake_case is
+accepted too. `tripType` is one of `interstate`, `intrastate`, `private-driver`,
+`family-group`, `airport`, `corporate`, `events`. `durationDays` is 1–30,
+`passengers` 1–14, `notes` at most 500 characters and optional.
+
+Failures use the frontend's `BookingFailure` shape rather than FastAPI's default
+`{"detail": [...]}`, which the form cannot read:
+
+```jsonc
+// 422 — bad input. `detail` is kept for debugging.
+{"ok": false, "code": "validation_error", "message": "passengers: Input should be less than or equal to 14", "detail": [...]}
+
+// 503 — DATABASE_URL missing. A deployment fault, not a bad request.
+{"ok": false, "code": "unavailable", "message": "The booking service is not configured..."}
+```
+
+To wire the frontend up, write its `http-transport.ts` against this endpoint
+and call `setBookingTransport(...)`, per
+`ease-drive-frontend/src/services/booking/README.md`. No component changes.
+
+## Database
+
+Neon Postgres, reached with SQLAlchemy 2.0 async over asyncpg, migrated with
+Alembic.
+
+```bash
+cp .env.example .env          # then paste your Neon DATABASE_URL
+alembic upgrade head          # create/refresh ease_bookings
+curl localhost:8000/api/v1/health
+```
+
+`/api/v1/health` reports whether the process can actually reach its database,
+including host, database name and latency, and never the password. It answers
+`200` even when degraded, because a diagnostic that fails tells you nothing:
+
+```json
+{"status":"ok","version":"0.1.0","database":{"configured":true,
+ "host":"ep-...-pooler.c-3.us-east-1.aws.neon.tech","database":"nibbsreport",
+ "pooled":"True","ok":true,"latency_ms":7967.9,"error":null}}
+```
+
+**Tables are prefixed `ease_`.** This Neon database is shared with the
+nibbs-report app, whose tables use `nibbs_`. Two consequences worth knowing:
+
+- Alembic's `env.py` filters autogenerate to `ease_` tables. Without that
+  filter, autogenerate reads the six `nibbs_` tables as "in the database but
+  not in the model" and emits `DROP TABLE` for each one.
+- The migration version table is `ease_alembic_version`, not the default, so
+  two apps on this database can never fight over migration state.
+
+`app/db/url.py` rewrites the Neon connection string before asyncpg sees it:
+the scheme gains `+asyncpg`, the libpq-only `sslmode` and `channel_binding`
+parameters are stripped (asyncpg raises `TypeError` on them) and re-expressed
+as its `ssl` argument, and a `-pooler` host disables the prepared-statement
+caches that PgBouncer's transaction mode cannot reuse.
 
 ## Setup
 
@@ -122,6 +213,11 @@ Settings live in `app/core/config.py`. Every field reads from an
 `EASE_DRIVE_`-prefixed environment variable or a local `.env`, falling back to
 the declared default. Copy `.env.example` to `.env` to override locally.
 
+`DATABASE_URL` is the one exception: it is read **unprefixed**, because Neon,
+Vercel, Render and Railway all inject that exact name, and requiring
+`EASE_DRIVE_DATABASE_URL` would mean hand-copying the credential on every host.
+The prefixed form still works as a fallback.
+
 ```bash
 EASE_DRIVE_GREETING="Welcome to Ease Drive" uvicorn app.main:app
 curl localhost:8000/api/v1/hello
@@ -134,12 +230,26 @@ tests swap configuration via `app.dependency_overrides`.
 
 ## Check
 
+Two lanes.
+
 ```bash
-./scripts/check.sh
+./scripts/check.sh          # gate: ruff, mypy --strict, pytest
+pytest -m integration       # the Neon lane, run before shipping schema changes
 ```
 
-Runs ruff (lint + format), `mypy --strict`, and pytest. 30 tests, deterministic,
-offline, under two seconds. The pre-commit hook runs exactly this.
+The gate is 97 tests, deterministic, offline and free. Database-backed tests
+run the real models and the real session machinery against in-memory SQLite, so
+no test in this lane touches the network.
+
+The integration lane (`tests/integration/`) is excluded from the gate by
+`-m "not integration"` because it is neither offline nor free. It skips rather
+than fails when `DATABASE_URL` is absent, and every row it writes is deleted in
+the same test.
+
+Wall clock for the gate is about 11s on this machine, of which roughly 9s is
+fixed import cost — `import app.main` alone is 4.8s, mostly `fastapi` (2.1s)
+and `sqlalchemy` (0.8s). Test execution itself is about 2s. The pre-commit hook
+runs the gate lane only.
 
 ## Typing
 
@@ -155,13 +265,20 @@ regardless of our code.
 
 ## Adding a resource
 
-Four files plus the test, following `hello` as the template:
+Follow `booking` as the template:
 
 1. `app/schemas/<name>.py` — request/response models
-2. `app/services/<name>.py` — business logic, no FastAPI imports
-3. `app/api/v1/endpoints/<name>.py` — the `APIRouter`
-4. `app/api/v1/router.py` — one `include_router` line
-5. `tests/api/v1/test_<name>.py` — plus mirrored schema/service tests
+2. `app/models/<name>.py` — the table, plus an import in `app/models/__init__.py`
+   so `Base.metadata` is complete when Alembic autogenerates
+3. `app/services/<name>.py` — business logic, no FastAPI imports
+4. `app/api/v1/endpoints/<name>.py` — the `APIRouter`
+5. `app/api/v1/router.py` — one `include_router` line
+6. `alembic revision --autogenerate -m "..."`, then **read the migration** before
+   applying it
+7. `tests/` — mirrored schema, service and endpoint tests
+
+Name every table `ease_*`. A table without that prefix is invisible to Alembic's
+autogenerate filter, so it will never be migrated.
 
 Breaking an existing contract means a new `app/api/v2/`, not an edit to v1.
 

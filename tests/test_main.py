@@ -20,13 +20,14 @@ def test_applies_settings_to_metadata() -> None:
 def test_mounts_every_route_under_the_version_prefix() -> None:
     settings = Settings(api_v1_prefix="/api/v1")
     paths = create_app(settings).openapi()["paths"]
-    assert list(paths) == ["/api/v1/hello"]
+    assert set(paths) == {"/api/v1/hello", "/api/v1/health", "/api/v1/bookings"}
     assert list(paths["/api/v1/hello"]) == ["get"]
+    assert list(paths["/api/v1/bookings"]) == ["post"]
 
 
 def test_version_prefix_is_configurable() -> None:
     paths = create_app(Settings(api_v1_prefix="/v2")).openapi()["paths"]
-    assert list(paths) == ["/v2/hello"]
+    assert set(paths) == {"/v2/hello", "/v2/health", "/v2/bookings"}
 
 
 def test_empty_prefix_serves_at_the_root() -> None:

@@ -1,5 +1,10 @@
 """Persistence models.
 
-Empty until a database lands. SQLAlchemy (or SQLModel) table classes go here,
-never Pydantic API schemas, which live in ``app.schemas``.
+SQLAlchemy table classes only, never Pydantic API schemas, which live in
+``app.schemas``. Every model must be imported here so ``Base.metadata`` is
+complete when Alembic autogenerates a migration.
 """
+
+from app.models.booking import Booking
+
+__all__ = ["Booking"]

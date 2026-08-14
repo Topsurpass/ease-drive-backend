@@ -92,6 +92,7 @@ sight. Do not reorganise it into per-service top-level directories.
 app/
 ├── main.py                    # create_app() factory + `app` ASGI entrypoint
 ├── core/                      # settings, security, logging
+├── db/                        # engine, session lifecycle, URL handling
 ├── api/
 │   ├── deps.py                # shared dependencies as Annotated aliases
 │   └── v1/
@@ -100,6 +101,7 @@ app/
 ├── schemas/                   # pydantic request/response models
 ├── models/                    # persistence models (SQLAlchemy)
 └── services/                  # business logic, HTTP-free
+alembic/                       # migrations, async env.py
 tests/                         # mirrors app/ exactly
 ```
 
@@ -121,6 +123,32 @@ tests/                         # mirrors app/ exactly
 - **Tests mirror `app/`.** `tests/api/v1/test_hello.py` covers
   `app/api/v1/endpoints/hello.py`. A new module gets its test in the mirrored
   path, in the same commit.
+
+### Database — Neon Postgres, shared instance
+
+SQLAlchemy 2.0 async over asyncpg, migrated with Alembic. Three rules exist
+because this Neon database is **shared with the nibbs-report app**:
+
+- **Every table is named `ease_*`.** nibbs-report owns `nibbs_*`. A table
+  without the prefix is invisible to Alembic's autogenerate filter in
+  `alembic/env.py` and will never be migrated.
+- **Never remove that filter.** Without it, autogenerate sees the six `nibbs_`
+  tables as "in the database but not in the model" and emits `DROP TABLE` for
+  each one. Always read a generated migration before applying it.
+- **The version table is `ease_alembic_version`**, not the default, so the two
+  apps cannot fight over migration state.
+
+Schema changes ship with a migration and a run of `pytest -m integration`
+against the real database, in the same commit.
+
+### Two test lanes
+
+- **Gate** (`./scripts/check.sh`) — deterministic, offline, free. Database
+  tests use in-memory SQLite through the real models and session machinery.
+  Runs on every commit.
+- **Integration** (`pytest -m integration`) — hits real Neon, excluded from the
+  gate by `-m "not integration"`. Skips when `DATABASE_URL` is absent. Every
+  row it writes is deleted in the same test. Run before shipping schema work.
 
 **Parallel-session safe.** The boundary for parallel work is the resource, not
 the directory: two sessions adding `drivers` and `rides` touch disjoint files in
