@@ -161,7 +161,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=list(config.cors_origins),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        # PATCH is load-bearing: the console changes a booking's status and
+        # edits a driver with it, and a method missing from this list is
+        # refused at the preflight, before the handler is ever reached. The
+        # browser then reports it as a CORS error, which sends the search for
+        # the cause in entirely the wrong direction.
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["*"],
     )
     application.add_exception_handler(
