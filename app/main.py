@@ -3,6 +3,7 @@
 Run with ``uv run uvicorn app.main:app --reload`` or ``fastapi run``.
 """
 
+import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
@@ -16,17 +17,41 @@ from fastapi.responses import JSONResponse
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.errors import ErrorEnvelopeMiddleware
+from app.core.logging import configure_logging
 from app.db.session import dispose_engines
 from app.schemas.booking import BookingError
 
+logger = logging.getLogger("app.startup")
+
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Close pooled database connections on shutdown.
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    """Announce the resolved configuration, then close pooled connections.
 
-    Without this, a reload or redeploy leaves Neon holding connections open
-    until they time out, which eats the project's connection budget.
+    The shutdown half matters because a reload or redeploy otherwise leaves
+    Neon holding connections open until they time out, which eats the
+    project's connection budget.
+
+    The startup half exists because both of this app's environment-dependent
+    settings fail silently. A missing DATABASE_URL surfaces as a 503 with no
+    server-side clue, and a missing EASE_DRIVE_CORS_ORIGINS surfaces in the
+    browser as a CORS error while the server logs a perfectly ordinary 200.
+    Printing both at boot puts the answer in the platform log before anyone
+    has to go looking for it.
     """
+    config: Settings = application.state.settings
+    logger.info(
+        "cors allowlist (%s): %s",
+        "from EASE_DRIVE_CORS_ORIGINS" if config.is_cors_configured else "DEFAULT",
+        ", ".join(config.cors_origins) or "(empty)",
+    )
+    if not config.is_cors_configured:
+        logger.warning(
+            "EASE_DRIVE_CORS_ORIGINS is not set; only the local dev origins are "
+            "allowed. A deployed browser client will be blocked by CORS."
+        )
+    if not config.is_database_configured:
+        logger.warning("DATABASE_URL is not set; database routes will return 503.")
     yield
     await dispose_engines()
 
@@ -80,12 +105,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     isolated app per case without import-order side effects.
     """
     config = settings or get_settings()
+    # Before anything logs, or the startup report goes nowhere on a real host.
+    configure_logging()
     application = FastAPI(
         title=config.project_name,
         version=config.version,
         openapi_url=f"{config.api_v1_prefix}/openapi.json",
         lifespan=lifespan,
     )
+    # `lifespan` gets the application, not the settings, so this is how the
+    # resolved config reaches it. Per-app rather than get_settings() so a test
+    # that builds an app with explicit Settings logs those, not the process's.
+    application.state.settings = config
     # Order matters, and it is inverted: the LAST middleware added is the
     # outermost. ErrorEnvelopeMiddleware goes on first so CORSMiddleware wraps
     # it, which is what lets a 500 leave with its CORS headers attached instead

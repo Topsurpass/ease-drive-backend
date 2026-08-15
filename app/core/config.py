@@ -44,24 +44,31 @@ class Settings(BaseSettings):
 
     # Browser origins allowed to call this API.
     #
+    # Deployment hostnames are deliberately absent from this default. Every
+    # environment names its own, through EASE_DRIVE_CORS_ORIGINS:
+    #
+    #     EASE_DRIVE_CORS_ORIGINS=https://your-frontend.vercel.app
+    #
+    # The value REPLACES this default rather than extending it, because an
+    # allowlist you cannot shrink is not an allowlist: a hostname baked into
+    # the code stays permitted on every deploy, and nobody can revoke it
+    # without shipping a release.
+    #
     # This must list the origin the BROWSER is on, which is the frontend, not
     # this backend's own URL. A request the page makes to its own origin is not
     # cross-origin and never consults this list.
+    #
+    # The default is the local dev loop, which is not a deployment fact and is
+    # true of any machine running the Next.js dev server. It exists so
+    # `fastapi dev` works against a fresh clone with no configuration.
     #
     # NoDecode plus the validator below means a hosting dashboard can hold a
     # plain comma-separated line instead of JSON, which is what those
     # single-line fields invite. Entries are normalized, so a pasted trailing
     # slash does not silently stop matching.
     cors_origins: Annotated[tuple[str, ...], NoDecode] = (
-        # The deployed frontend. This is the one that matters: it is the origin
-        # the browser is on when the booking form posts.
-        "https://ease-drive-frontend.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        # The deployed backend's own origin. Same-origin calls (the /docs page
-        # trying it out) never need this, but it costs nothing and makes the
-        # deployed host explicit.
-        "https://ease-drive-backend.fastapicloud.dev",
     )
 
     @field_validator("cors_origins", mode="before")
@@ -73,6 +80,17 @@ class Settings(BaseSettings):
     def is_database_configured(self) -> bool:
         """True when a database URL is present and non-blank."""
         return bool(self.database_url and self.database_url.strip())
+
+    @property
+    def is_cors_configured(self) -> bool:
+        """True when the allowlist came from configuration, not the default.
+
+        A deploy that forgets EASE_DRIVE_CORS_ORIGINS is left allowing only
+        localhost, and the browser reports that as a CORS failure with nothing
+        in the server log. This is what lets startup and /health say so out
+        loud instead.
+        """
+        return "cors_origins" in self.model_fields_set
 
 
 @lru_cache

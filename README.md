@@ -125,20 +125,43 @@ and call `setBookingTransport(...)`, per
 ## CORS
 
 The browser blocks a cross-origin POST unless this API names the calling origin
-in its allowlist. Allowed by default:
-
-| Origin                                        | Why                            |
-| --------------------------------------------- | ------------------------------ |
-| `https://ease-drive-frontend.vercel.app`       | the deployed frontend          |
-| `http://localhost:3000`                        | Next.js dev server             |
-| `http://127.0.0.1:3000`                        | same, via loopback IP          |
-| `https://ease-drive-backend.fastapicloud.dev`  | this API's own deployed origin |
-
-Override with a comma-separated list (a JSON array also works). Setting it
-**replaces** the defaults, so keep localhost if you still develop against it:
+in its allowlist. **No deployment hostname is hard-coded.** Every environment
+names its own, comma-separated (a JSON array also works):
 
 ```bash
-EASE_DRIVE_CORS_ORIGINS=http://localhost:3000,https://your-frontend.vercel.app
+EASE_DRIVE_CORS_ORIGINS=https://your-frontend.vercel.app
+```
+
+The default, used only when that variable is unset, is the local dev loop:
+
+| Origin                  | Why                   |
+| ----------------------- | --------------------- |
+| `http://localhost:3000` | Next.js dev server    |
+| `http://127.0.0.1:3000` | same, via loopback IP |
+
+That default exists so `fastapi dev` works against a fresh clone. It is not a
+deployment fact, and a real host is expected to set the variable.
+
+Setting it **replaces** the default rather than extending it. Merging would
+mean a hostname could never be revoked without shipping a release, which is the
+same reason nothing is baked in to begin with. Keep localhost in the list if
+you also develop against that host.
+
+Because a forgotten variable shows up as a browser CORS error and a perfectly
+ordinary `200` in the server log, the resolved allowlist is reported in two
+places. The process logs it at startup and warns when it is unset:
+
+```
+INFO  app.startup  cors allowlist (DEFAULT): http://localhost:3000, http://127.0.0.1:3000
+WARN  app.startup  EASE_DRIVE_CORS_ORIGINS is not set; only the local dev origins are allowed.
+```
+
+and `/api/v1/health` answers the same question over HTTP, so a live deploy can
+be checked without a redeploy:
+
+```bash
+curl -s .../api/v1/health | jq .cors
+{"configured": true, "origins": ["https://your-frontend.vercel.app"]}
 ```
 
 **The entry must be the origin the browser is on, which is the frontend.** This
@@ -201,8 +224,9 @@ including host, database name and latency, and never the password. It answers
 
 ```json
 {"status":"ok","version":"0.1.0","database":{"configured":true,
- "host":"ep-...-pooler.c-3.us-east-1.aws.neon.tech","database":"nibbsreport",
- "pooled":"True","ok":true,"latency_ms":7967.9,"error":null}}
+ "host":"ep-...-pooler.c-3.us-east-1.aws.neon.tech","database":"ease-drive",
+ "pooled":"True","ok":true,"latency_ms":7967.9,"error":null},
+ "cors":{"configured":true,"origins":["https://your-frontend.vercel.app"]}}
 ```
 
 **Tables are prefixed `ease_`.** This Neon database is shared with the
@@ -281,8 +305,29 @@ Settings live in `app/core/config.py`. Every field reads from an
 `EASE_DRIVE_`-prefixed environment variable or a local `.env`, falling back to
 the declared default. Copy `.env.example` to `.env` to override locally.
 
-`DATABASE_URL` is the one exception: it is read **unprefixed**, because Neon,
-Vercel, Render and Railway all inject that exact name, and requiring
+**Nothing environment-specific is hard-coded.** No credential and no
+deployment hostname has a default; both come from the server's environment.
+The declared defaults are either product facts (`Ease Drive API`, `/api/v1`) or
+the local dev loop, and `tests/core/test_config.py` fails the gate if a
+`vercel.app`, `fastapicloud.dev`, `neon.tech` or `amazonaws.com` host is ever
+compiled back in.
+
+| Variable                  | Required on a server | Default            |
+| ------------------------- | -------------------- | ------------------ |
+| `DATABASE_URL`            | yes                  | none — routes 503  |
+| `EASE_DRIVE_CORS_ORIGINS` | yes                  | localhost dev only |
+| `EASE_DRIVE_PROJECT_NAME` | no                   | `Ease Drive API`   |
+| `EASE_DRIVE_VERSION`      | no                   | `0.1.0`            |
+| `EASE_DRIVE_API_V1_PREFIX`| no                   | `/api/v1`          |
+| `EASE_DRIVE_GREETING`     | no                   | `Hello, World!`    |
+
+Both required variables fail *silently* when missing — a 503 on one path, a
+browser-side CORS error on the other — so the process logs each at startup and
+`/api/v1/health` reports both. Check a live deploy with
+`curl .../api/v1/health`.
+
+`DATABASE_URL` is the one field read **unprefixed**, because Neon, Vercel,
+Render and Railway all inject that exact name, and requiring
 `EASE_DRIVE_DATABASE_URL` would mean hand-copying the credential on every host.
 The prefixed form still works as a fallback.
 

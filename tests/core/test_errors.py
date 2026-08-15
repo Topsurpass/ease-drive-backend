@@ -24,7 +24,11 @@ ORIGIN = "https://ease-drive-frontend.vercel.app"
 @pytest.fixture
 def exploding_app() -> FastAPI:
     """An app with one route that raises, to exercise the unhandled path."""
-    settings = Settings(database_url=None)
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        database_url=None,
+        cors_origins=(ORIGIN,),
+    )
     application = create_app(settings)
     application.dependency_overrides[get_settings] = lambda: settings
 
@@ -103,5 +107,21 @@ def test_deliberate_http_errors_keep_their_own_body(client: TestClient) -> None:
     assert response.json()["detail"]["code"] == "unavailable"
 
 
-def test_settings_allow_the_deployed_frontend_origin() -> None:
-    assert ORIGIN in Settings(_env_file=None).cors_origins  # type: ignore[call-arg]
+def test_a_configured_origin_survives_to_the_middleware() -> None:
+    """The env var is only useful if it reaches CORSMiddleware intact.
+
+    Settings could parse it correctly and create_app could still drop it. This
+    asserts the whole path: configuration in, response header out.
+    """
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        database_url=None,
+        cors_origins=("https://configured.example/",),  # trailing slash, as pasted
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.get(
+            "/api/v1/hello", headers={"Origin": "https://configured.example"}
+        )
+    assert (
+        response.headers["access-control-allow-origin"] == "https://configured.example"
+    )

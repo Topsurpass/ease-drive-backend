@@ -6,7 +6,6 @@ browser, because Starlette matches the `Origin` header by exact string.
 
 import pytest
 
-from app.core.config import Settings
 from app.core.cors import normalize_origin, parse_origins
 
 
@@ -84,27 +83,5 @@ def test_deduplicates_while_keeping_order() -> None:
     )
 
 
-def test_settings_allow_the_deployed_backend_origin() -> None:
-    assert (
-        "https://ease-drive-backend.fastapicloud.dev"
-        in Settings(_env_file=None).cors_origins  # type: ignore[call-arg]
-    )
-
-
-def test_settings_allow_local_frontend_development() -> None:
-    origins = Settings(_env_file=None).cors_origins  # type: ignore[call-arg]
-    assert "http://localhost:3000" in origins
-    assert "http://127.0.0.1:3000" in origins
-
-
-def test_settings_read_a_comma_separated_environment_value(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(
-        "EASE_DRIVE_CORS_ORIGINS",
-        "https://ease-drive.vercel.app/, http://localhost:3000",
-    )
-    assert Settings(_env_file=None).cors_origins == (  # type: ignore[call-arg]
-        "https://ease-drive.vercel.app",
-        "http://localhost:3000",
-    )
+# How Settings resolves these origins lives in tests/core/test_config.py; this
+# module covers the parsing in isolation.

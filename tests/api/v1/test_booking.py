@@ -135,10 +135,18 @@ def test_answers_the_preflight(db_client: TestClient) -> None:
     assert "POST" in response.headers["access-control-allow-methods"]
 
 
-def test_allows_the_deployed_backend_origin(db_session: AsyncSession) -> None:
-    """The origin Temz asked for, exercised through the real middleware."""
+def test_allows_a_configured_deployment_origin(db_session: AsyncSession) -> None:
+    """A deployed origin comes from EASE_DRIVE_CORS_ORIGINS, not from the code.
+
+    Exercised end to end: a POST from that origin must both succeed and come
+    back with the header, which is the pair the browser needs.
+    """
     origin = "https://ease-drive-backend.fastapicloud.dev"
-    settings = Settings(database_url=None)
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        database_url=None,
+        cors_origins=(origin,),
+    )
     application = create_app(settings)
     application.dependency_overrides[get_settings] = lambda: settings
 

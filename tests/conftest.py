@@ -32,13 +32,20 @@ import app.models  # noqa: F401  # isort: skip
 
 @pytest.fixture
 def settings() -> Settings:
-    """Deterministic settings, independent of the ambient environment."""
+    """Deterministic settings, independent of the ambient environment.
+
+    `_env_file=None` is load-bearing: without it a developer's own `.env`
+    supplies any field this call omits, and a test that passes on one machine
+    fails on another. Every field the suite asserts on is named here.
+    """
     return Settings(
+        _env_file=None,  # type: ignore[call-arg]
         project_name="Ease Drive API",
         version="0.1.0",
         api_v1_prefix="/api/v1",
         greeting="Hello, World!",
         database_url=None,
+        cors_origins=("http://localhost:3000", "http://127.0.0.1:3000"),
     )
 
 

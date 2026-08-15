@@ -36,20 +36,43 @@ class DatabaseHealth(BaseModel):
     error: str | None = None
 
 
+class CorsHealth(BaseModel):
+    """What the browser is actually allowed to do, checkable over HTTP.
+
+    `configured` is false when EASE_DRIVE_CORS_ORIGINS is unset and the app
+    fell back to the local dev default, which is the shape of a deploy that
+    will be blocked by CORS. Origins are not secret: the middleware echoes the
+    matching one back in a response header on every allowed request.
+
+    `status` deliberately ignores this. A missing allowlist is a
+    misconfiguration, not an unhealthy process, and grading it would report
+    every local dev run as degraded.
+    """
+
+    configured: bool
+    origins: list[str]
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     version: str
     database: DatabaseHealth
+    cors: CorsHealth
 
 
 @router.get("/health", response_model=HealthResponse, summary="Deployment health")
 async def read_health(settings: SettingsDep) -> HealthResponse:
     """Report whether the process can actually reach its database."""
+    cors = CorsHealth(
+        configured=settings.is_cors_configured,
+        origins=list(settings.cors_origins),
+    )
     if not settings.is_database_configured:
         return HealthResponse(
             status="degraded",
             version=settings.version,
             database=DatabaseHealth(configured=False, error="DATABASE_URL is not set"),
+            cors=cors,
         )
 
     assert settings.database_url is not None  # narrowed by the guard above
@@ -78,4 +101,5 @@ async def read_health(settings: SettingsDep) -> HealthResponse:
         status="ok" if database.ok else "degraded",
         version=settings.version,
         database=database,
+        cors=cors,
     )
