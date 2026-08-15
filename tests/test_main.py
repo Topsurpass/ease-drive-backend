@@ -21,16 +21,32 @@ def test_applies_settings_to_metadata() -> None:
 
 
 def test_mounts_every_route_under_the_version_prefix() -> None:
+    """Asserts the property, not a fixed list of paths.
+
+    This used to compare against a hardcoded set, so every new endpoint failed
+    a test that had nothing to do with it. What actually matters is that no
+    route escapes the prefix: one mounted at the root would be unversioned
+    forever and could not be changed without breaking clients.
+    """
     settings = Settings(api_v1_prefix="/api/v1")
     paths = create_app(settings).openapi()["paths"]
-    assert set(paths) == {"/api/v1/hello", "/api/v1/health", "/api/v1/bookings"}
+
+    assert paths, "no routes were mounted at all"
+    assert all(path.startswith("/api/v1/") for path in paths), sorted(paths)
+    # Spot-check the two whose methods are part of the published contract.
     assert list(paths["/api/v1/hello"]) == ["get"]
     assert list(paths["/api/v1/bookings"]) == ["post"]
 
 
 def test_version_prefix_is_configurable() -> None:
-    paths = create_app(Settings(api_v1_prefix="/v2")).openapi()["paths"]
-    assert set(paths) == {"/v2/hello", "/v2/health", "/v2/bookings"}
+    default = set(create_app(Settings(api_v1_prefix="/api/v1")).openapi()["paths"])
+    moved = set(create_app(Settings(api_v1_prefix="/v2")).openapi()["paths"])
+
+    assert all(path.startswith("/v2/") for path in moved), sorted(moved)
+    # The same routes at a different prefix — nothing gained or lost.
+    assert {path.removeprefix("/v2") for path in moved} == {
+        path.removeprefix("/api/v1") for path in default
+    }
 
 
 def test_empty_prefix_serves_at_the_root() -> None:

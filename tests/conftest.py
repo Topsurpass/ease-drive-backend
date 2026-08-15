@@ -7,12 +7,17 @@ Database-backed gate tests run against in-memory SQLite through the real
 models and the real session machinery, so they stay offline, free and fast.
 Neon itself is exercised by the ``integration`` lane in
 ``tests/integration/``, which the gate excludes.
+
+Password hashing is deliberately weakened for the whole suite — see
+``_fast_password_hashing`` below.
 """
 
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -23,11 +28,34 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_db_session
 from app.core.config import Settings, get_settings
+from app.core.security import _build_password_hasher, set_password_hasher
 from app.db.base import Base
 from app.main import create_app
 
 # Every model must be imported before create_all, or its table is missing.
 import app.models  # noqa: F401  # isort: skip
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _fast_password_hashing() -> Iterator[None]:
+    """Swap Argon2id down to trivial parameters for the whole suite.
+
+    Argon2 is slow on purpose, which is correct in production and ruinous in a
+    gate that hashes a password in most of its fixtures: the real parameters
+    cost ~650ms a call and pushed this suite past two minutes, against a stated
+    budget of two seconds.
+
+    What this trades away is covered elsewhere: `tests/core/test_security.py`
+    exercises the production hasher directly, so the real parameters are still
+    proved once rather than 30 times. What it must never do is hide a
+    correctness bug — and it cannot, because every other property of hashing
+    (round-trip, rejection, malformed input) is parameter-independent.
+    """
+    set_password_hasher(
+        PasswordHash((Argon2Hasher(time_cost=1, memory_cost=8, parallelism=1),))
+    )
+    yield
+    set_password_hasher(_build_password_hasher())
 
 
 @pytest.fixture
@@ -46,6 +74,9 @@ def settings() -> Settings:
         greeting="Hello, World!",
         database_url=None,
         cors_origins=("http://localhost:3000", "http://127.0.0.1:3000"),
+        # Fixed, and long enough to clear the RFC 7518 minimum the Settings
+        # validator enforces. Obviously never a real key: it is in the repo.
+        jwt_secret="test-signing-key-long-enough-for-hs256-aaaa",
     )
 
 

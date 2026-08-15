@@ -104,7 +104,9 @@ def test_deliberate_http_errors_keep_their_own_body(client: TestClient) -> None:
         },
     )
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-    assert response.json()["detail"]["code"] == "unavailable"
+    # Top level, not nested under `detail`: `http_exception_handler` in
+    # `app.main` unwraps our own error envelopes so the frontend can read them.
+    assert response.json()["code"] == "unavailable"
 
 
 def test_a_configured_origin_survives_to_the_middleware() -> None:

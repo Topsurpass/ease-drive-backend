@@ -99,13 +99,23 @@ async def test_rejected_payloads_write_nothing(
 
 
 def test_returns_503_when_no_database_is_configured(client: TestClient) -> None:
-    """A missing DATABASE_URL is a deployment fault, not a bad request."""
+    """A missing DATABASE_URL is a deployment fault, not a bad request.
+
+    The envelope is at the top level, not nested under `detail`. It used to be
+    nested, because `HTTPException(detail=...)` always wraps — and the
+    frontend's `toRequestError` only reads `detail` when it is a string, so
+    this message never reached the user. `http_exception_handler` in
+    `app.main` unwraps it now.
+    """
     response = client.post(ENDPOINT, json=_payload())
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
 
-    detail = response.json()["detail"]
-    assert detail["ok"] is False
-    assert detail["code"] == "unavailable"
+    body = response.json()
+    assert body["ok"] is False
+    assert body["code"] == "unavailable"
+    assert "detail" not in body
+    # The message the form actually shows.
+    assert "not configured" in body["message"]
 
 
 def test_rejects_unsupported_method(db_client: TestClient) -> None:

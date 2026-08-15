@@ -13,6 +13,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
@@ -98,6 +99,40 @@ async def validation_exception_handler(
     )
 
 
+def _is_error_envelope(detail: object) -> bool:
+    """True when a raised detail is already one of our `{ok, code, message}` bodies."""
+    return isinstance(detail, Mapping) and "code" in detail and "message" in detail
+
+
+async def http_exception_handler(_: Request, exception: Exception) -> JSONResponse:
+    """Lift an error envelope out of FastAPI's `detail` wrapper.
+
+    `HTTPException(detail=...)` always serialises as `{"detail": <detail>}`. So
+    a route that carefully raises `{ok: false, code, message}` arrives at the
+    browser as `{"detail": {"ok": false, ...}}`, one level deeper than the
+    contract says — and the frontend's `toRequestError` only reads `detail`
+    when it is a *string*. The result was that the 503 written for a missing
+    DATABASE_URL never reached the user; they saw the generic "The server
+    responded with 503." instead.
+
+    Envelopes are unwrapped to the top level. Anything else (a bare string from
+    Starlette's own 404, say) keeps FastAPI's default shape, so nothing that
+    already worked changes.
+    """
+    assert isinstance(exception, StarletteHTTPException)
+
+    if _is_error_envelope(exception.detail):
+        content = jsonable_encoder(exception.detail)
+    else:
+        content = jsonable_encoder({"detail": exception.detail})
+
+    return JSONResponse(
+        status_code=exception.status_code,
+        content=content,
+        headers=exception.headers,
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build a configured FastAPI application.
 
@@ -132,6 +167,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.add_exception_handler(
         RequestValidationError, validation_exception_handler
     )
+    application.add_exception_handler(StarletteHTTPException, http_exception_handler)
     application.include_router(api_router, prefix=config.api_v1_prefix)
     return application
 

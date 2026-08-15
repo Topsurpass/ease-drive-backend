@@ -17,6 +17,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    ForeignKey,
     Index,
     SmallInteger,
     String,
@@ -25,6 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.domain.booking_status import INITIAL_STATUS, BookingStatus
 
 MAX_NAME = 80
 MAX_PHONE = 20
@@ -33,6 +35,13 @@ MAX_TRIP_TYPE = 32
 MAX_LOCATION = 120
 MAX_NOTES = 500
 MAX_REFERENCE = 16
+MAX_STATUS = 16
+
+# Internal notes are staff-written and can hold a fuller account than the
+# customer's own 500-character note.
+MAX_INTERNAL_NOTES = 2000
+
+_STATUS_VALUES = ", ".join(f"'{status.value}'" for status in BookingStatus)
 
 
 def _utcnow() -> datetime:
@@ -52,7 +61,16 @@ class Booking(Base):
             "passengers >= 1 AND passengers <= 14",
             name="ease_bookings_passengers_range",
         ),
+        # Built from the enum rather than typed out, so adding a status to
+        # `app.domain.booking_status` and forgetting this constraint is not a
+        # thing that can happen.
+        CheckConstraint(
+            f"status IN ({_STATUS_VALUES})", name="ease_bookings_status_valid"
+        ),
         Index("ease_bookings_created_at_idx", "created_at"),
+        # The console's default view is "open work, newest first", which is
+        # this index exactly.
+        Index("ease_bookings_status_created_at_idx", "status", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -83,5 +101,32 @@ class Booking(Base):
         DateTime(timezone=True), default=_utcnow
     )
 
+    # --- ops console ------------------------------------------------------
+
+    # `server_default` as well as `default`, because the migration adds this
+    # column to a table that already holds rows. Without it the ALTER either
+    # fails on NOT NULL or leaves existing bookings with a NULL status that no
+    # enum member matches.
+    status: Mapped[str] = mapped_column(
+        String(MAX_STATUS),
+        default=INITIAL_STATUS.value,
+        server_default=INITIAL_STATUS.value,
+    )
+
+    # SET NULL rather than CASCADE: deleting a driver must never delete the
+    # bookings they were assigned to. The booking survives, unassigned.
+    assigned_driver_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("ease_drivers.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Staff-only. Never returned by any public endpoint.
+    internal_notes: Mapped[str | None] = mapped_column(
+        String(MAX_INTERNAL_NOTES), nullable=True
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
     def __repr__(self) -> str:
-        return f"<Booking {self.reference} {self.trip_type} {self.start_date}>"
+        return f"<Booking {self.reference} {self.status} {self.start_date}>"

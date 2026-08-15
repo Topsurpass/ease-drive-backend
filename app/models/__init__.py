@@ -6,5 +6,16 @@ complete when Alembic autogenerates a migration.
 """
 
 from app.models.booking import Booking
+from app.models.booking_event import BookingEvent, BookingEventType
+from app.models.driver import Driver
+from app.models.refresh_token import RefreshToken
+from app.models.user import User
 
-__all__ = ["Booking"]
+__all__ = [
+    "Booking",
+    "BookingEvent",
+    "BookingEventType",
+    "Driver",
+    "RefreshToken",
+    "User",
+]
