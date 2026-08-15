@@ -218,7 +218,11 @@ async def authenticate(
         family_id=uuid.uuid4(),
     )
     await session.commit()
-    await session.refresh(user)
+    # No `session.refresh(user)` here. The sessionmaker sets
+    # `expire_on_commit=False`, so the instance keeps its loaded attributes
+    # through the commit and a refresh is a wasted SELECT. That matters more
+    # than it sounds: every statement is a round trip to Neon, and this one is
+    # on the sign-in path, which is the slowest thing a user waits for.
     return tokens
 
 
@@ -305,7 +309,6 @@ async def rotate_refresh_token(
     record.replaced_by_hash = hash_refresh_token(successor)
 
     await session.commit()
-    await session.refresh(user)
     return tokens
 
 
